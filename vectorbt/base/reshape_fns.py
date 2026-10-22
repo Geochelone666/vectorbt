@@ -10,7 +10,7 @@ and unstacking.
 
     [Array-like parameters](https://vectorbt.pro/features/optimization/strategy-optimization/#array-like-parameters)
     automatically broadcast combinations of values, such as stop distances, alongside time series.
-    [Align arrays with different indexes](https://vectorbt.pro/features/tooling/time-series-operations/#index-alignment)
+    [Align arrays with different indexes](https://vectorbt.pro/features/tooling/multidimensional-research/#index-alignment)
     before broadcasting.
 
 """
@@ -950,7 +950,11 @@ def unstack_to_df(
 
     # Unstack and post-process
     unstacked = unstack_to_array(sr, levels=(index_levels, column_levels))
-    df = pd.DataFrame(unstacked, index=new_index, columns=new_columns)
+    # Match the array's NumPy-sorted coordinates before restoring encounter-order axes.
+    sorted_index = new_index[np.argsort(new_index.to_numpy())]
+    sorted_columns = new_columns[np.argsort(new_columns.to_numpy())]
+    df = pd.DataFrame(unstacked, index=sorted_index, columns=sorted_columns)
+    df = df.reindex(index=new_index, columns=new_columns)
     if symmetric:
         return make_symmetric(df, sort=sort)
     return df

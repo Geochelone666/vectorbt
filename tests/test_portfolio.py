@@ -84,17 +84,51 @@ def test_order_func_init_records(test_row_wise, test_flexible):
     assert pf.orders.count() == 0
     record_arrays_close(
         seen["order_records"],
-        np.array([( -1, -1, -1, np.nan, np.nan, np.nan, -1)], dtype=order_dt),
+        np.array([(-1, -1, -1, np.nan, np.nan, np.nan, -1)], dtype=order_dt),
     )
     record_arrays_close(
         seen["log_records"],
         np.array(
             [
                 (
-                    -1, -1, -1, -1, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
-                    np.nan, np.nan, -1, -1, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
-                    np.nan, False, False, False, False, np.nan, np.nan, np.nan, np.nan, np.nan,
-                    np.nan, np.nan, np.nan, np.nan, -1, -1, -1, -1
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    -1,
+                    -1,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    False,
+                    False,
+                    False,
+                    False,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
                 )
             ],
             dtype=log_dt,
@@ -102,12 +136,16 @@ def test_order_func_init_records(test_row_wise, test_flexible):
     )
     record_arrays_close(
         seen["last_pos_record"],
-        np.array([(-1, -1, np.nan, -1, np.nan, np.nan, -1, np.nan, np.nan, np.nan, np.nan, -1, -1, -1)], dtype=trade_dt),
+        np.array(
+            [(-1, -1, np.nan, -1, np.nan, np.nan, -1, np.nan, np.nan, np.nan, np.nan, -1, -1, -1)], dtype=trade_dt
+        ),
     )
     if not test_flexible:
         record_arrays_close(
             seen["pos_record_now"],
-            np.array((-1, -1, np.nan, -1, np.nan, np.nan, -1, np.nan, np.nan, np.nan, np.nan, -1, -1, -1), dtype=trade_dt),
+            np.array(
+                (-1, -1, np.nan, -1, np.nan, np.nan, -1, np.nan, np.nan, np.nan, np.nan, -1, -1, -1), dtype=trade_dt
+            ),
         )
 
 
@@ -8441,6 +8479,69 @@ class TestPortfolio:
         pd.testing.assert_series_equal(pf_shared[["second"]].init_cash, pf_shared.init_cash[["second"]])
         pd.testing.assert_frame_equal(pf_shared[["second"]].call_seq, pf_shared.call_seq[["c"]])
 
+    @pytest.mark.parametrize("cash_sharing", [False, True])
+    @pytest.mark.parametrize(
+        "groups,col_idxs,asset_values,unshared_init_cash",
+        [
+            (
+                ["G1", "G1", "G2", "G2", "G3", "G3"],
+                [4, 5, 0, 1, 2, 3],
+                [[60.0, 20.0, 40.0], [66.0, 22.0, 36.0], [68.0, 24.0, 38.0]],
+                [200.0, 200.0, 200.0],
+            ),
+            (
+                ["G1", "G2", "G2", "G3", "G3", "G3"],
+                [3, 4, 5, 0, 1, 2],
+                [[80.0, 10.0, 30.0], [84.0, 11.0, 29.0], [87.0, 12.0, 31.0]],
+                [300.0, 100.0, 200.0],
+            ),
+        ],
+    )
+    def test_group_selection_membership(self, cash_sharing, groups, col_idxs, asset_values, unshared_init_cash):
+        # Buy one unit of each asset at row zero, then hold. Prices independently determine group assets.
+        close = pd.DataFrame(
+            [
+                [10.0, 10.0, 20.0, 20.0, 30.0, 30.0],
+                [11.0, 11.0, 18.0, 18.0, 33.0, 33.0],
+                [12.0, 12.0, 19.0, 19.0, 34.0, 34.0],
+            ],
+            columns=pd.Index(list("abcdef"), name="asset"),
+        )
+        size = np.zeros((3, 6))
+        size[0] = 1.0
+        pf = vbt.Portfolio.from_orders(
+            close,
+            size,
+            init_cash=[150.0, 250.0, 400.0] if cash_sharing else 100.0,
+            fees=0.0,
+            group_by=pd.Index(groups, name="strategy"),
+            cash_sharing=cash_sharing,
+            call_seq="reversed",
+            attach_call_seq=True,
+        )
+        before = pf.orders.values.tobytes()
+        selected = pf.iloc[[2, 0, 1]]
+        columns = pd.Index(["G3", "G1", "G2"], name="strategy")
+        initial = np.array([400.0, 150.0, 250.0] if cash_sharing else unshared_init_cash)
+        assets = np.array(asset_values)
+        # Cash is initial capital less row-zero purchase costs; no later order changes those holdings.
+        cash = np.broadcast_to(initial - assets[0], (3, 3))
+        pd.testing.assert_frame_equal(selected.cash(), pd.DataFrame(cash, columns=columns))
+        pd.testing.assert_frame_equal(selected.asset_value(), pd.DataFrame(assets, columns=columns))
+        expected_value = pd.DataFrame(cash + assets, columns=columns)
+        pd.testing.assert_frame_equal(selected.value(), expected_value)
+        pd.testing.assert_frame_equal(pf.iloc[:].value(), expected_value[["G1", "G2", "G3"]])
+        pd.testing.assert_series_equal(selected.init_cash, pd.Series(initial, index=columns, name="init_cash"))
+        pd.testing.assert_frame_equal(selected.close, close.iloc[:, col_idxs])
+        pd.testing.assert_frame_equal(selected.call_seq, pf.call_seq.iloc[:, col_idxs])
+        # Selection must preserve record identity and row/column association, including reversed execution.
+        source = pf.orders.values
+        expected_records = np.concatenate([source[source["col"] == col] for col in col_idxs])
+        expected_records["col"] = np.arange(6)
+        record_arrays_close(selected.orders.values, expected_records)
+        assert pf.orders.values.tobytes() == before
+        pd.testing.assert_index_equal(pf.wrapper.grouper.group_by, pd.Index(groups, name="strategy"))
+
     def test_regroup(self):
         assert pf.regroup(None) == pf
         assert pf.regroup(False) == pf
@@ -10829,3 +10930,89 @@ class TestPortfolio:
             _ = pf.plot(subplots="all")
         with pytest.raises(Exception):
             _ = pf_grouped.plot(subplots="all")
+
+
+# ############# Issue #810: Best Trade [%] definition ############# #
+
+
+def test_best_trade_pct_definition():
+    """Regression test for issue #810.
+
+    Best Trade [%] is the maximum individual trade return, net of fees, relative
+    to gross entry notional (NOT portfolio initial cash). By default, only closed
+    trades are included; incl_open=True also includes open trades.
+    """
+    # Two short trades: B has larger PnL, A has higher return
+    # Trade A: entry=100, exit=90, size=10  -> PnL=100,  Return=10%
+    # Trade B: entry=200, exit=190, size=100 -> PnL=1000, Return=5%
+    price = pd.Series(
+        [100.0, 90.0, 200.0, 190.0],
+        index=pd.date_range("2020-01-01", periods=4, freq="D"),
+    )
+    # Entries at 0 and 2, exits at 1 and 3
+    entries = pd.Series([True, False, True, False], index=price.index)
+    exits = pd.Series([False, True, False, True], index=price.index)
+    size = pd.Series([10.0, np.nan, 100.0, np.nan], index=price.index)
+
+    pf = vbt.Portfolio.from_signals(price, entries, exits, size=size, direction="shortonly", init_cash=1000000)
+
+    # B has the larger PnL
+    assert pf.trades.pnl.max() == 1000.0
+    # But A has the higher return -> Best Trade [%] must be 10.0, not 5.0
+    np.testing.assert_allclose(pf.trades.returns.max(), 0.10)
+    np.testing.assert_allclose(pf.stats()["Best Trade [%]"], 10.0)
+
+    # Definition consistency: stats value == max trade return * 100
+    expected = pf.trades.closed.returns.max() * 100
+    np.testing.assert_allclose(pf.stats()["Best Trade [%]"], expected)
+
+
+@pytest.mark.parametrize("fees", [0.0, 0.001])
+def test_short_trade_return_math(fees):
+    """Short trade return is net of fees, relative to gross entry notional."""
+    price = pd.Series(
+        [100.0, 90.0],
+        index=pd.date_range("2020-01-01", periods=2, freq="D"),
+    )
+    entries = pd.Series([True, False], index=price.index)
+    exits = pd.Series([False, True], index=price.index)
+
+    pf = vbt.Portfolio.from_signals(price, entries, exits, size=10.0, direction="shortonly", fees=fees)
+    trade = pf.trades.records_readable.iloc[0]
+    # Short: profit when price falls. entry=100, exit=90, size=10
+    # Both entry and exit fees reduce PnL; the denominator excludes fees.
+    expected_pnl = 10.0 * (100.0 - 90.0) - fees * 10.0 * (100.0 + 90.0)
+    np.testing.assert_allclose(trade["PnL"], expected_pnl)
+    np.testing.assert_allclose(trade["Return"], trade["PnL"] / (trade["Size"] * trade["Avg Entry Price"]))
+    np.testing.assert_allclose(trade["Return"], expected_pnl / 1000.0)
+
+
+@pytest.mark.parametrize("incl_open", [False, True])
+def test_best_worst_trade_pct_incl_open(incl_open):
+    """Best/Worst Trade [%] use closed trades unless incl_open=True."""
+    price = pd.DataFrame(
+        {"best": [100.0, 90.0, 100.0, 80.0, 80.0, 80.0], "worst": [100.0, 90.0, 100.0, 80.0, 100.0, 110.0]},
+        index=pd.date_range("2020-01-01", periods=6, freq="D"),
+    )
+    entries = pd.DataFrame(
+        {
+            "best": [True, False, True, False, False, False],
+            "worst": [True, False, False, False, True, False],
+        },
+        index=price.index,
+    )
+    exits = pd.Series([False, True, False, False, False, False], index=price.index)
+    pf = vbt.Portfolio.from_signals(price, entries, exits, size=10.0, direction="shortonly", fees=0.001)
+    for column, metric, reducer in [
+        ("best", "Best Trade [%]", "max"),
+        ("worst", "Worst Trade [%]", "min"),
+    ]:
+        trades = pf[column].trades
+        assert trades.closed.count() == 1
+        assert trades.open.count() == 1
+        selected = trades if incl_open else trades.closed
+        expected = getattr(selected.returns, reducer)() * 100
+        actual = pf.stats(column=column, settings=dict(incl_open=incl_open))[metric]
+        np.testing.assert_allclose(actual, expected)
+        if incl_open:
+            assert not np.isclose(actual, getattr(trades.closed.returns, reducer)() * 100)
