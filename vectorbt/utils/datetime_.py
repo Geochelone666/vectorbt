@@ -139,8 +139,11 @@ def to_tzaware_datetime(
     if isinstance(dt_like, float):
         dt = datetime.fromtimestamp(dt_like, timezone.utc)
     elif isinstance(dt_like, int):
-        if len(str(dt_like)) > 10:
-            dt = datetime.fromtimestamp(dt_like / 10 ** (len(str(dt_like)) - 10), timezone.utc)
+        # The sign is not a timestamp digit; use the same unit heuristic
+        # for equal positive and negative magnitudes.
+        digits = len(str(abs(dt_like)))
+        if digits > 10:
+            dt = datetime.fromtimestamp(dt_like / 10 ** (digits - 10), timezone.utc)
         else:
             dt = datetime.fromtimestamp(dt_like, timezone.utc)
     elif isinstance(dt_like, str):
